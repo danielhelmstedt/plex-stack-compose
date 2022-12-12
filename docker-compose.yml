@@ -1,0 +1,252 @@
+version: '3'
+
+services:
+  swag: # Handles SSL certificates, web server/reverse proxy
+    container_name: swag
+    image: ghcr.io/linuxserver/swag:latest
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    ports:
+      - 443:443
+      - 80:80 #optional
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - URL=${BASE_URL}
+      - SUBDOMAINS=${SUBDOMAINS}
+      - VALIDATION=dns
+      - CERTPROVIDER=zerossl
+      - DNSPLUGIN=cloudflare
+      - CF_ZONE_ID=${CF_ZONE_ID}
+      - CF_ACCOUNT_ID=${CF_ACCOUNT_ID}
+      - CF_API_TOKEN=${CF_API_TOKEN}
+      - DOCKER_MODS=linuxserver/mods:swag-auto-proxy|linuxserver/mods:universal-docker|linuxserver/mods:universal-cloudflared
+      - PROPAGATION= #optional
+      - EMAIL=${EMAIL} # used by zerossl
+      - ONLY_SUBDOMAINS=false #optional
+      - EXTRA_DOMAINS= #optional
+      - STAGING=false #optional
+      - MAXMINDDB_LICENSE_KEY=#{MAXMIND_KEY} # IP Geolocation and Online Fraud Prevention, optional
+    volumes:
+      - "/etc/localtime:/etc/localtime:ro"
+      - ${CONFIG_DIR}/swag:/config
+    cap_add:
+      - NET_ADMIN
+
+  cloudflare-ddns: # keep Cloudflare's dns records updated
+    container_name: cloudflare-ddns
+    image: oznu/cloudflare-ddns:latest
+    restart: unless-stopped
+    environment:
+      - API_KEY=${CF_API_TOKEN}
+      - ZONE=${BASE_URL}
+      - SUBDOMAIN= # ${SUBDOMAINS} # disabled to see if i really need this
+      - PROXIED=false
+
+  organizr: # Web frontend for Plex Stack apps
+    container_name: organizr
+    image: organizr/organizr:latest
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    ports:
+      - 81:80
+      - 444:443
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      #- branch=dev
+    volumes:
+      - "/etc/localtime:/etc/localtime:ro"
+      - ${CONFIG_DIR}/organizr:/config
+
+  plex: # Plex Media Server
+    container_name: plex
+    image: ghcr.io/linuxserver/plex:latest
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    ports:
+      - 32400:32400
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+      - VERSION=docker
+      - DOCKER_MODS=ghcr.io/gilbn/theme.park:plex
+      - TP_THEME=${THEME}
+    volumes:
+      - "/etc/localtime:/etc/localtime:ro"
+      - ${CONFIG_DIR}/plex:/config # plex database
+      - ${CONFIG_DIR}/plex/transcode:/transcode # temp transcoded files
+      - ${DATA_DIR}:/data # data library
+    devices:
+      - /dev/dri:/dev/dri # iGPU access
+      
+  transmission: # Torrent client with traffic tunneled through a VPN
+    image: haugene/transmission-openvpn:latest
+    container_name: transmission
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    ports:
+        - 9091:9091
+        - 51413:51413
+    environment:
+      - TZ=${TZ} # timezone, defined in .env
+
+      - OPENVPN_PROVIDER=CUSTOM
+      - OPENVPN_USERNAME=**None** # use openvpn-credentials.txt
+      - OPENVPN_PASSWORD=**None** # use openvpn-credentials.txt
+      - LOCAL_NETWORK=${NETWORK} # local network in CIDR format
+      - TRANSMISSION_DOWNLOAD_DIR=/data/downloads/complete
+      - TRANSMISSION_INCOMPLETE_DIR=/data/downloads/incomplete
+      - TRANSMISSION_WATCH_DIR=/data/downloads/torrents      
+      - TRANSMISSION_RATIO_LIMIT=0
+      - TRANSMISSION_RATIO_LIMIT_ENABLED=true
+      - TRANSMISSION_WEB_UI=transmission-web-control
+    volumes:
+      - "/etc/localtime:/etc/localtime:ro"
+      - ${DATA_DIR}/downloads:/data/downloads # download directory
+      - ${CONFIG_DIR}/transmission:/data/transmission-home #config files
+      - ${CONFIG_DIR}/transmission/default.ovpn:/etc/openvpn/custom/default.ovpn #VPN profile 
+      - ${CONFIG_DIR}/transmission/openvpn-credentials.txt:/config/openvpn-credentials.txt #VPN credentials 
+    cap_add:
+        - NET_ADMIN
+    logging:
+        driver: json-file
+        options:
+            max-size: 10m
+
+  sonarr: # Handles TV Show library
+    container_name: sonarr
+    image: ghcr.io/linuxserver/sonarr:latest
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    ports:
+      - 8989:8989
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+      - DOCKER_MODS=ghcr.io/gilbn/theme.park:sonarr
+      - TP_THEME=${THEME}
+    volumes:
+      - ${CONFIG_DIR}/sonarr:/config # config files
+      - ${DATA_DIR}:/data # data shows folder
+
+  radarr: # Handles Movie library
+    container_name: radarr
+    image: ghcr.io/linuxserver/radarr:latest
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    ports:
+      - 7878:7878
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+      - DOCKER_MODS=ghcr.io/gilbn/theme.park:radarr
+      - TP_THEME=${THEME}
+    volumes:
+      - ${CONFIG_DIR}/radarr:/config # config files
+      - ${DATA_DIR}:/data # data folder
+      
+
+  lidarr: # Handles Music library
+    container_name: lidarr
+    image: lscr.io/linuxserver/lidarr:latest
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+    volumes:
+      - ${CONFIG_DIR}/lidarr:/config
+      - ${DATA_DIR}:/data #optional
+    ports:
+      - 8686:8686
+
+
+  prowlarr: # Manages torrent indexers
+    container_name: prowlarr
+    image: ghcr.io/linuxserver/prowlarr:nightly
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    ports:
+      - 9696:9696
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+      - UMASK=002 # default file permissions
+      - DOCKER_MODS=ghcr.io/gilbn/theme.park:prowlarr
+      - TP_THEME=${THEME}
+    volumes:
+      - "/etc/localtime:/etc/localtime:ro"
+      - ${DATA_DIR}/downloads/torrent:/downloads # place where to put .torrent files for manual download
+      - ${CONFIG_DIR}/prowlarr:/config # config files
+    
+  bazarr: #  Manages subtitles
+    container_name: bazarr
+    image: ghcr.io/linuxserver/bazarr:latest
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    ports:
+      - 6767:6767
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+      - DOCKER_MODS=ghcr.io/gilbn/theme.park:bazarr
+      - TP_THEME=${THEME}
+    volumes:
+      - "/etc/localtime:/etc/localtime:ro"
+      - ${CONFIG_DIR}/bazarr:/config # config files
+      - ${DATA_DIR}/movies:/movies # movies folder, same as Radarr
+      - ${DATA_DIR}/tv:/tv # tv shows folder, same as Sonarr
+
+  overseerr: # Manages media requests
+    container_name: overseerr
+    image: ghcr.io/linuxserver/overseerr:latest
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    ports:
+      - 5055:5055
+    environment:
+      - PUID=${PUID} # default user id, defined in .env
+      - PGID=${PGID} # default group id, defined in .env
+      - TZ=${TZ} # timezone, defined in .env
+    volumes:
+      - "/etc/localtime:/etc/localtime:ro"
+      - ${CONFIG_DIR}/overseerr:/config # config files
+      
+  tautulli: # Monitor and track Plex stats and activity
+    container_name: tautulli
+    image: ghcr.io/linuxserver/tautulli:latest
+    restart: unless-stopped
+    networks:
+    - plex-stack
+    ports:
+      - 8181:8181
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - "/etc/localtime:/etc/localtime:ro"
+      - ${CONFIG_DIR}/tautulli:/config
+
+networks:
+  plex-stack:
+    driver: bridge
